@@ -14,13 +14,13 @@ def count_calls(method: Callable) -> Callable:
     '''
         Counts the number of times a method is called.
     '''
-    key = method.__qualname__
 
     @wraps(method)
     def wrapper(self, *args, **kwargs):
         '''
             Wrapper function.
         '''
+        key = method.__qualname__
         self._redis.incr(key)
         return method(self, *args, **kwargs)
     return wrapper
@@ -30,46 +30,39 @@ def call_history(method: Callable) -> Callable:
     """ Decorator to store the history of inputs and
     outputs for a particular function.
     """
+    key = method.__qualname__
+    inputs = key + ":inputs"
+    outputs = key + ":outputs"
 
     @wraps(method)
     def wrapper(self, *args, **kwargs):  # sourcery skip: avoid-builtin-shadow
         """ Wrapper for decorator functionality """
-        input = str(args)
-        self._redis.rpush(f"{method.__qualname__}:inputs", input)
-
-        output = str(method(self, *args, **kwargs))
-        self._redis.rpush(f"{method.__qualname__}:outputs", output)
-
-        return output
+        self._redis.rpush(inputs, str(args))
+        data = method(self, *args, **kwargs)
+        self._redis.rpush(outputs, str(data))
+        return data
 
     return wrapper
 
 
-def replay(fn: Callable):  # sourcery skip: use-fstring-for-concatenation
-    """Display the history of calls of a particular function"""
-    r = redis.Redis()
-    f_name = fn.__qualname__
-    n_calls = r.get(f_name)
-    try:
-        n_calls = n_calls.decode('utf-8')
-    except Exception:
-        n_calls = 0
-    print(f'{f_name} was called {n_calls} times:')
-
-    ins = r.lrange(f_name + ":inputs", 0, -1)
-    outs = r.lrange(f_name + ":outputs", 0, -1)
-
-    for i, o in zip(ins, outs):
-        try:
-            i = i.decode('utf-8')
-        except Exception:
-            i = ""
-        try:
-            o = o.decode('utf-8')
-        except Exception:
-            o = ""
-
-        print(f'{f_name}(*{i}) -> {o}')
+def replay(method: Callable) -> None:
+    # sourcery skip: use-fstring-for-concatenation, use-fstring-for-formatting
+    """
+    Replays the history of a function
+    Args:
+        method: The function to be decorated
+    Returns:
+        None
+    """
+    name = method.__qualname__
+    cache = redis.Redis()
+    calls = cache.get(name).decode("utf-8")
+    print("{} was called {} times:".format(name, calls))
+    inputs = cache.lrange(name + ":inputs", 0, -1)
+    outputs = cache.lrange(name + ":outputs", 0, -1)
+    for i, o in zip(inputs, outputs):
+        print("{}(*{}) -> {}".format(name, i.decode('utf-8'),
+                                     o.decode('utf-8')))
 
 
 class Cache:
@@ -83,8 +76,8 @@ class Cache:
         self._redis = redis.Redis()
         self._redis.flushdb()
 
-    @call_history
     @count_calls
+    @call_history
     def store(self, data: Union[str, bytes, int, float]) -> str:
         '''
             Store data in the cache.
@@ -120,4 +113,3 @@ class Cache:
         except Exception:
             value = 0
         return value
-    
